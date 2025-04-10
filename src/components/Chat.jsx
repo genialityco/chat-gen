@@ -29,11 +29,11 @@ import {
 import { db } from "../lib/firebase";
 import { useEffect, useRef, useState, useCallback } from "react";
 
-/* --- helpers ---------------------------------------------------------- */
+import EmojiPicker from "emoji-picker-react";
+
 const PAGE = 40;
 const getInitials = (name = "") => name.slice(0, 2).toUpperCase();
 
-/* --- componente ------------------------------------------------------- */
 export default function Chat({
   nombre,
   chatid,
@@ -42,17 +42,20 @@ export default function Chat({
   anonimo = "false",
   message_highlighted = "",
 }) {
-  /* ---------------- estado ---------------- */
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [loadingMore, setLoading] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const bottomRef = useRef(null);
+
+  // Ref para el contenedor del picker
+  const emojiPickerRef = useRef(null);
 
   const path = iduser
     ? `/events/${eventid}/private/${chatid}/messages`
     : `/events/${eventid}/public/messages`;
 
-  /* ----------- carga inicial + suscripción -------------- */
+  /* ---------------- carga inicial + suscripción ---------------- */
   useEffect(() => {
     let unsubAdd, unsubRemove, unsubChange;
 
@@ -63,7 +66,6 @@ export default function Chat({
       setMessages(arr);
 
       const msgRef = ref(db, path);
-
       unsubAdd = onChildAdded(msgRef, (s) => {
         setMessages((prev) =>
           prev.find((m) => m.key === s.key)
@@ -83,6 +85,7 @@ export default function Chat({
         );
       });
     };
+
     firstLoad();
 
     return () => {
@@ -92,7 +95,7 @@ export default function Chat({
     };
   }, [path]);
 
-  /* ------------- paginar hacia arriba ------------------ */
+  /* ----------------- paginar hacia arriba ---------------- */
   const loadMore = useCallback(async () => {
     if (loadingMore || !messages.length) return;
     setLoading(true);
@@ -110,7 +113,7 @@ export default function Chat({
 
   const onScroll = ({ y }) => y === 0 && loadMore();
 
-  /* ------------- enviar mensaje ------------------------- */
+  /* ----------------- enviar mensaje ---------------------- */
   const send = (e) => {
     e.preventDefault();
     const value = text.trim();
@@ -124,19 +127,37 @@ export default function Chat({
     setText("");
   };
 
-  /* ---------------- render ------------------------------ */
+  /* --- función para manejar clic en un emoji ------------- */
+  const onEmojiClick = (emojiData) => {
+    setText((prev) => prev + emojiData.emoji);
+  };
+
+  /* --- efecto para detectar clic fuera del picker -------- */
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(event.target)
+      ) {
+        setShowEmojiPicker(false);
+      }
+    }
+
+    if (showEmojiPicker) {
+      document.addEventListener("mousedown", handleClickOutside);
+    } else {
+      document.removeEventListener("mousedown", handleClickOutside);
+    }
+
+    // Limpia el listener al desmontar o al cambiar showEmojiPicker
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showEmojiPicker]);
+
+  /* --------------------- render -------------------------- */
   return (
     <Flex direction="column" h="100vh" p="md" gap="sm">
-      {/* encabezado general */}
-      {/* <Group gap="xs">
-          <Avatar radius="xl" size="sm" color="indigo">
-            {getInitials(nombre || 'U')}
-          </Avatar>
-          <Text fw={600}>
-            {iduser ? `Chat con ${nombre}` : 'Chat público'}
-          </Text>
-        </Group> */}
-
       {/* lista de mensajes */}
       <ScrollArea flex="1" offsetScrollbars onScrollPositionChange={onScroll}>
         <Stack gap="xs" pr="sm">
@@ -160,7 +181,6 @@ export default function Chat({
                     : undefined
                 }
               >
-                {/* cabecera dentro de la burbuja */}
                 <Group justify="space-between" mb={4}>
                   <Text size="xs" fw={600}>
                     {m.name}
@@ -177,7 +197,7 @@ export default function Chat({
 
             return (
               <Flex key={m.key} justify={align} gap="xs" w="100%">
-                {/* avatar izquierda/derecha según el autor */}
+                {/* Avatar a la izquierda/derecha según autor */}
                 {!mine && (
                   <Avatar radius="xl" size="md" color="blue">
                     {getInitials(m.name)}
@@ -196,9 +216,27 @@ export default function Chat({
         </Stack>
       </ScrollArea>
 
-      {/* input */}
+      {/* formulario de envío */}
       <form onSubmit={send}>
         <Flex gap="xs">
+          {/* Botón para mostrar/ocultar el picker */}
+          <ActionIcon
+            variant="subtle"
+            onClick={() => setShowEmojiPicker((prev) => !prev)}
+          >
+            <Text>😀</Text>
+          </ActionIcon>
+
+          {/* Picker, dentro de un contenedor con ref */}
+          {showEmojiPicker && (
+            <div
+              ref={emojiPickerRef}
+              style={{ position: "absolute", bottom: "60px" }}
+            >
+              <EmojiPicker onEmojiClick={onEmojiClick} />
+            </div>
+          )}
+
           <TextInput
             flex="1"
             placeholder="Escribe un mensaje…"
