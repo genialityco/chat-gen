@@ -55,6 +55,9 @@ export default function WhatsAppBulkSender() {
     reader.readAsBinaryString(file);
   };
 
+  // Función para eñ tiempo ala zar entre 0 y 1 segundo
+  const randomDelay = () => new Promise((res) => setTimeout(res, Math.random() * 1000));
+
   const sendMessages = async () => {
     setSending(true);
     let res = [];
@@ -79,6 +82,8 @@ export default function WhatsAppBulkSender() {
         res.push({ phone, message, status: "Error", error: err.message });
       }
       setResults([...res]);
+      // Esperar un tiempoa al azar
+      await randomDelay();
     }
     setSending(false);
   };
