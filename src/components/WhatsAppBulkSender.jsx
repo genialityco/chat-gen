@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import * as XLSX from "xlsx";
+import WhatsAppSentMessagesAdmin from "./WhatsAppSentMessagesAdmin";
 
 export default function WhatsAppBulkSender() {
   const [rows, setRows] = useState([]);
@@ -250,6 +251,7 @@ export default function WhatsAppBulkSender() {
           </li>
         </ul>
       </div>
+      <WhatsAppSentMessagesAdmin />
     </div>
   );
 }
