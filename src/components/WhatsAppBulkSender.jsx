@@ -84,7 +84,7 @@ export default function WhatsAppBulkSender() {
       if (imagebase64) payload.imageBase64 = imagebase64;
 
       try {
-        const response = await fetch("https://apiwhatsapp.geniality.com.co/send", {
+        const response = await fetch("https://apiwhatsapp.geniality.com.co/send-consent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
