@@ -34,6 +34,50 @@ import EmojiPicker from "emoji-picker-react";
 const PAGE = 40;
 const getInitials = (name = "") => name.slice(0, 2).toUpperCase();
 
+// Añade esto cerca de tus imports (no requiere librerías extra)
+const linkRegex =
+  /((https?:\/\/|www\.)[^\s<>"'()]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
+
+function renderWithLinks(text = "") {
+  const nodes = [];
+  let lastIndex = 0;
+
+  text.replace(linkRegex, (match, _g1, _g2, email, offset) => {
+    // Texto plano previo al match
+    if (lastIndex < offset) {
+      nodes.push(text.slice(lastIndex, offset));
+    }
+
+    // Determinar href
+    let href = match;
+    if (email) {
+      href = `mailto:${match}`;
+    } else if (/^www\./i.test(match)) {
+      href = `https://${match}`;
+    }
+
+    nodes.push(
+      <a
+        key={`${match}-${offset}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ wordBreak: "break-all" }}
+      >
+        {match}
+      </a>
+    );
+
+    lastIndex = offset + match.length;
+    return match;
+  });
+
+  // Resto del texto
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+
+  return nodes;
+}
+
 export default function Chat({
   nombre,
   chatid,
@@ -189,8 +233,12 @@ export default function Chat({
                     {time}
                   </Text>
                 </Group>
-                <Text size="sm" lh={1.4}>
-                  {m.text}
+                <Text
+                  size="sm"
+                  lh={1.4}
+                  style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+                >
+                  {renderWithLinks(m.text)}
                 </Text>
               </Paper>
             );
