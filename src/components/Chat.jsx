@@ -44,16 +44,11 @@ function renderWithLinks(text = "") {
   let lastIndex = 0;
 
   text.replace(linkRegex, (match, _g1, _g2, email, offset) => {
-    if (lastIndex < offset) {
-      nodes.push(text.slice(lastIndex, offset));
-    }
+    if (lastIndex < offset) nodes.push(text.slice(lastIndex, offset));
 
     let href = match;
-    if (email) {
-      href = `mailto:${match}`;
-    } else if (/^www\./i.test(match)) {
-      href = `https://${match}`;
-    }
+    if (email) href = `mailto:${match}`;
+    else if (/^www\./i.test(match)) href = `https://${match}`;
 
     nodes.push(
       <a
@@ -97,8 +92,15 @@ export default function Chat({
   const [loadingMore, setLoading] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [asQuestion, setAsQuestion] = useState(false);
+
   const bottomRef = useRef(null);
   const emojiPickerRef = useRef(null);
+
+  // ✅ ScrollArea viewport ref (para controlar scroll real)
+  const viewportRef = useRef(null);
+
+  // ✅ bandera para hacer scroll después del render (evita que falle por timing)
+  const shouldAutoScrollRef = useRef(false);
 
   const view = (getSearchParam("view") || "").toLowerCase();
   const isQuestionsView = view === "questions";
@@ -107,8 +109,23 @@ export default function Chat({
     ? `/events/${eventid}/private/${chatid}/messages`
     : `/events/${eventid}/public/messages`;
 
-  // identificador para likes (si no tienes iduser real, usará el nombre)
+  // identificador para likes
   const userKey = iduser || nombre || "anon";
+  const myName = anonimo === "true" ? "Anónimo" : nombre;
+
+  const scrollToBottom = useCallback((behavior = "smooth") => {
+    const el = viewportRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const isNearBottom = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return true; // si no existe aún, asumimos que sí
+    const threshold = 160; // px
+    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    return distance < threshold;
+  }, []);
 
   /* ---------------- carga inicial + suscripción ---------------- */
   useEffect(() => {
@@ -119,15 +136,21 @@ export default function Chat({
       const arr = [];
       snap.forEach((s) => arr.push({ key: s.key, ...s.val() }));
       setMessages(arr);
+      if (!isQuestionsView) {
+        shouldAutoScrollRef.current = true;
+      }
 
       const msgRef = ref(db, path);
+
       unsubAdd = onChildAdded(msgRef, (s) => {
+        const incoming = { key: s.key, ...s.val() };
+        const fromMe = incoming?.name === myName;
+        const stick = fromMe || isNearBottom();
+        shouldAutoScrollRef.current = stick;
+
         setMessages((prev) =>
-          prev.find((m) => m.key === s.key)
-            ? prev
-            : [...prev, { key: s.key, ...s.val() }]
+          prev.find((m) => m.key === s.key) ? prev : [...prev, incoming]
         );
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
       });
 
       unsubRemove = onChildRemoved(msgRef, (s) => {
@@ -148,12 +171,23 @@ export default function Chat({
       unsubRemove && unsubRemove();
       unsubChange && unsubChange();
     };
-  }, [path]);
+  }, [path, myName, isNearBottom, isQuestionsView]);
+
+  // ✅ Auto-scroll DESPUÉS de render cuando cambie la lista mostrada
+  useEffect(() => {
+    if (shouldAutoScrollRef.current) {
+      shouldAutoScrollRef.current = false;
+      requestAnimationFrame(() => scrollToBottom("smooth"));
+    }
+  }, [messages.length, scrollToBottom]);
 
   /* ----------------- paginar hacia arriba ---------------- */
   const loadMore = useCallback(async () => {
     if (loadingMore || !messages.length) return;
     setLoading(true);
+    const el = viewportRef.current;
+    const prevScrollHeight = el?.scrollHeight || 0;
+    const prevScrollTop = el?.scrollTop || 0;
 
     const firstKey = messages[0].key;
     const snap = await get(
@@ -163,6 +197,13 @@ export default function Chat({
     const arr = [];
     snap.forEach((s) => arr.push({ key: s.key, ...s.val() }));
     setMessages((prev) => [...arr, ...prev]);
+    requestAnimationFrame(() => {
+      const el2 = viewportRef.current;
+      if (!el2) return;
+      const newScrollHeight = el2.scrollHeight;
+      el2.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+    });
+
     setLoading(false);
   }, [loadingMore, messages, path]);
 
@@ -178,20 +219,22 @@ export default function Chat({
 
     const payload = {
       text: value,
-      name: anonimo === "true" ? "Anónimo" : nombre,
+      name: myName,
       ts: serverTimestamp(),
       type: isQ ? "question" : "message",
       ...(isQ
         ? {
             highlighted: true,
-            likesCount: 0, // 🔹 contador numérico inicializado en 0
-            likes: {}, // 🔹 mapa de usuarios que han dado like
+            likesCount: 0,
+            likes: {},
           }
         : {}),
     };
+    shouldAutoScrollRef.current = true;
 
     push(ref(db, path), payload);
     setText("");
+    setShowEmojiPicker(false);
   };
 
   /* --- forzar modo pregunta cuando estás en view=questions ---- */
@@ -199,12 +242,9 @@ export default function Chat({
     if (isQuestionsView) setAsQuestion(true);
   }, [isQuestionsView]);
 
-  /* --- función para manejar clic en un emoji ------------- */
-  const onEmojiClick = (emojiData) => {
-    setText((prev) => prev + emojiData.emoji);
-  };
+  /* --- emoji picker ------------------------------------ */
+  const onEmojiClick = (emojiData) => setText((prev) => prev + emojiData.emoji);
 
-  /* --- efecto para detectar clic fuera del picker -------- */
   useEffect(() => {
     function handleClickOutside(event) {
       if (
@@ -215,19 +255,14 @@ export default function Chat({
       }
     }
 
-    if (showEmojiPicker) {
+    if (showEmojiPicker)
       document.addEventListener("mousedown", handleClickOutside);
-    } else {
-      document.removeEventListener("mousedown", handleClickOutside);
-    }
+    else document.removeEventListener("mousedown", handleClickOutside);
 
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showEmojiPicker]);
 
-  /* --- helpers de likes --------------------------------- */
-  // si existe likesCount lo usamos; si no, contamos las claves de likes
+  /* --- likes ------------------------------------------- */
   const getLikeCount = (m) =>
     typeof m.likesCount === "number"
       ? m.likesCount
@@ -246,11 +281,8 @@ export default function Chat({
       const already = !!likes[userKey];
       const newLikes = { ...likes };
 
-      if (already) {
-        delete newLikes[userKey];
-      } else {
-        newLikes[userKey] = true;
-      }
+      if (already) delete newLikes[userKey];
+      else newLikes[userKey] = true;
 
       const currentCount =
         typeof current.likesCount === "number"
@@ -277,15 +309,15 @@ export default function Chat({
     const qs = norm.filter((m) => m.type === "question");
 
     if (isQuestionsView) {
-      // ordenar preguntas por likes desc y luego por ts desc
+      // ✅ ordenar: likes DESC, y si empatan => MÁS ANTIGUO primero (ts ASC)
       const sorted = [...qs].sort((a, b) => {
         const la = getLikeCount(a);
         const lb = getLikeCount(b);
         if (lb !== la) return lb - la;
 
-        const ta = typeof a.ts === "number" ? a.ts : 0;
-        const tb = typeof b.ts === "number" ? b.ts : 0;
-        return tb - ta;
+        const ta = typeof a.ts === "number" ? a.ts : Number.MAX_SAFE_INTEGER;
+        const tb = typeof b.ts === "number" ? b.ts : Number.MAX_SAFE_INTEGER;
+        return ta - tb; // ✅ antiguo -> reciente
       });
 
       return { displayed: sorted };
@@ -298,30 +330,26 @@ export default function Chat({
   return (
     <Flex direction="column" h="100vh" p="md" gap="sm">
       {/* lista de mensajes */}
-      <ScrollArea flex="1" offsetScrollbars onScrollPositionChange={onScroll}>
+      <ScrollArea
+        flex="1"
+        offsetScrollbars
+        onScrollPositionChange={onScroll}
+        viewportRef={viewportRef}
+      >
         <Stack gap="md" pr="sm">
           {loadingMore && <Loader size="xs" mx="auto" my="xs" />}
 
           {displayed.map((m) => {
-            const mine =
-              m.name === nombre || (anonimo === "true" && m.name === "Anónimo");
+            const mine = m.name === myName;
             const time = m.ts ? dayjs(m.ts).format("HH:mm") : "";
             const isQuestion = (m.type || "message") === "question";
 
-            // REGLA DE ALINEACIÓN:
-            // - En view=questions: preguntas izq/der según mine
-            // - En chat en vivo: preguntas centradas
-            // - Mensajes normales: izq/der según mine
             let justify;
-            if (isQuestionsView && isQuestion) {
+            if (isQuestionsView && isQuestion)
               justify = mine ? "flex-end" : "flex-start";
-            } else if (!isQuestionsView && isQuestion) {
-              justify = "center";
-            } else {
-              justify = mine ? "flex-end" : "flex-start";
-            }
+            else if (!isQuestionsView && isQuestion) justify = "center";
+            else justify = mine ? "flex-end" : "flex-start";
 
-            // Paleta más suave y limpia
             const bg = isQuestion ? "blue.0" : mine ? "white" : "gray.0";
 
             const likeCount = isQuestion ? getLikeCount(m) : 0;
@@ -340,14 +368,27 @@ export default function Chat({
                 style={{
                   whiteSpace: "normal",
                   maxWidth: "min(760px, 92%)",
-                  borderColor: isQuestion ? "#1da10fff" : "#021222ff",
+                  borderColor: isQuestion
+                    ? "var(--mantine-color-blue-6)"
+                    : "var(--mantine-color-gray-4)",
+                  borderLeft: isQuestion
+                    ? "6px solid var(--mantine-color-blue-6)"
+                    : undefined,
                 }}
               >
-                <Group justify="space-between" mb={isQuestion ? 8 : 4}>
-                  <Text size={isQuestion ? "sm" : "xs"} fw={600} c="dimmed">
-                    {m.name}
-                  </Text>
-                  <Text size={isQuestion ? "sm" : "xs"} c="dimmed">
+                <Group justify="space-between" mb={8} align="center">
+                  <Group gap={8} align="center">
+                    {isQuestion && (
+                      <Badge variant="filled" color="blue" size="sm">
+                        PREGUNTA
+                      </Badge>
+                    )}
+                    <Text size="xs" fw={600} c="dimmed">
+                      {m.name}
+                    </Text>
+                  </Group>
+
+                  <Text size="xs" c="dimmed">
                     {time}
                   </Text>
                 </Group>
@@ -358,7 +399,9 @@ export default function Chat({
                   style={{
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
-                    ...(m.text?.includes(message_highlighted)
+                    ...(message_highlighted &&
+                    typeof m.text === "string" &&
+                    m.text.includes(message_highlighted)
                       ? { fontWeight: 600, filter: "brightness(1.03)" }
                       : {}),
                   }}
@@ -367,32 +410,19 @@ export default function Chat({
                 </Text>
 
                 {isQuestion && (
-                  <Group justify="space-between" mt="xs" align="center">
-                    <Badge
-                      variant="light"
-                      color="blue"
+                  <Group justify="flex-end" mt="xs" gap="xs" align="center">
+                    <ActionIcon
+                      variant={liked ? "filled" : "subtle"}
                       size="sm"
-                      leftSection={
-                        <Text size="xs" c="blue" fw={700}>
-                          ?
-                        </Text>
-                      }
+                      onClick={() => toggleLike(m)}
+                      aria-label="Like"
                     >
-                      PREGUNTA
-                    </Badge>
+                      <IconThumbUp size={14} />
+                    </ActionIcon>
 
-                    <Group gap={4} align="center">
-                      <ActionIcon
-                        variant={liked ? "filled" : "subtle"}
-                        size="sm"
-                        onClick={() => toggleLike(m)}
-                      >
-                        <IconThumbUp size={14} />
-                      </ActionIcon>
-                      <Text size="xs" c="dimmed">
-                        {likeCount}
-                      </Text>
-                    </Group>
+                    <Text size="xs" c="dimmed">
+                      {likeCount}
+                    </Text>
                   </Group>
                 )}
               </Paper>
@@ -417,13 +447,14 @@ export default function Chat({
               </Flex>
             );
           })}
+
           <div ref={bottomRef} />
         </Stack>
       </ScrollArea>
 
       {/* formulario de envío */}
       <form onSubmit={send}>
-        <Flex gap="xs" align="center">
+        <Flex gap="xs" align="center" style={{ position: "relative" }}>
           <ActionIcon
             variant="subtle"
             onClick={() => setShowEmojiPicker((prev) => !prev)}

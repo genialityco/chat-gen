@@ -1,42 +1,64 @@
 // src/pages/AdminMessages.jsx
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from "react-router-dom";
 import {
-  Table, ScrollArea, Group, Button, Modal, Loader,
-  Stack, ActionIcon, Title, Breadcrumbs
-} from '@mantine/core';
-import { IconTrash, IconDownload, IconArrowLeft, IconReload } from '@tabler/icons-react';
-import * as XLSX from 'xlsx';
-import { useEffect, useState } from 'react';
-import { db } from '../lib/firebase';
-import { ref, get, query, orderByKey, remove, child } from 'firebase/database';
-import dayjs from 'dayjs';
+  Table,
+  ScrollArea,
+  Group,
+  Button,
+  Modal,
+  Loader,
+  Stack,
+  ActionIcon,
+  Title,
+  Breadcrumbs,
+  Badge,
+  Text,
+} from "@mantine/core";
+import {
+  IconTrash,
+  IconDownload,
+  IconArrowLeft,
+  IconReload,
+} from "@tabler/icons-react";
+import * as XLSX from "xlsx";
+import { useEffect, useState, useCallback } from "react";
+import { db } from "../lib/firebase";
+import { ref, get, query, orderByKey, remove, child } from "firebase/database";
+import dayjs from "dayjs";
 
-const path = (id) => `/events/${id}/public/messages`;
-const fmt  = (ts) => dayjs(ts).format('DD/MM/YYYY HH:mm');
+const dbPath = (id) => `/events/${id}/public/messages`;
+const fmt = (ts) => (ts ? dayjs(ts).format("DD/MM/YYYY HH:mm") : "");
+
+const getLikeCount = (r) =>
+  typeof r.likesCount === "number"
+    ? r.likesCount
+    : Object.keys(r.likes || {}).length;
 
 export default function AdminMessages() {
   const { id } = useParams();
 
   // State
-  const [rows,   setRows]   = useState(null); // Todos los mensajes del evento
-  const [open,   setOpen]   = useState(false); // Modal de confirmación
-  const [target, setTarget] = useState(null);  // 'ALL' o el ID de un mensaje
+  const [rows, setRows] = useState(null); // null = cargando
+  const [open, setOpen] = useState(false); // Modal confirmación
+  const [target, setTarget] = useState(null); // 'ALL' o key del mensaje
 
   // Cargar datos
-  const load = async () => {
-    const snap = await get(query(ref(db, path(id)), orderByKey()));
+  const load = useCallback(async () => {
+    const snap = await get(query(ref(db, dbPath(id)), orderByKey()));
     const arr = [];
-    snap.forEach(s => {
-      // Cada snapshot es un mensaje
-      arr.push({ key: s.key, ...s.val() });
-    });
-    // arr tendrá varias filas, incluso si pertenecen al mismo nombre
+
+    if (snap.exists()) {
+      snap.forEach((s) => {
+        arr.push({ key: s.key, ...s.val() });
+      });
+    }
+
     setRows(arr);
-  };
+  }, [id]);
 
   useEffect(() => {
     load();
-  }, [id]);
+  }, [load]);
 
   // Borrar un mensaje
   const delOne = (k) => {
@@ -46,18 +68,16 @@ export default function AdminMessages() {
 
   // Borrar todos los mensajes
   const delAll = () => {
-    setTarget('ALL');
+    setTarget("ALL");
     setOpen(true);
   };
 
-  // Confirmar en modal
+  // Confirmar borrado
   const confirm = async () => {
-    if (target === 'ALL') {
-      // Borrar TODO el nodo
-      await remove(ref(db, path(id)));
+    if (target === "ALL") {
+      await remove(ref(db, dbPath(id)));
     } else {
-      // Borrar solo un mensaje
-      await remove(child(ref(db), `${path(id)}/${target}`));
+      await remove(child(ref(db), `${dbPath(id)}/${target}`));
     }
     setOpen(false);
     load();
@@ -65,15 +85,25 @@ export default function AdminMessages() {
 
   // Exportar a Excel
   const exportXlsx = () => {
-    // Cada mensaje es una fila
-    const data = rows.map(r => ({
-      Usuario: r.name,
-      Mensaje: r.text,
-      Fecha:   fmt(r.ts),
-    }));
+    if (!rows?.length) return;
+
+    const data = rows.map((r) => {
+      const type =
+        (r.type || "message") === "question" ? "Pregunta" : "Mensaje";
+      const isQuestion = type === "Pregunta";
+
+      return {
+        Usuario: r.name || "",
+        Tipo: type,
+        Mensaje: r.text || "",
+        Fecha: fmt(r.ts),
+        Likes: isQuestion ? getLikeCount(r) : "",
+      };
+    });
+
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Chat');
+    XLSX.utils.book_append_sheet(wb, ws, "Chat");
     XLSX.writeFile(wb, `chat_${id}.xlsx`);
   };
 
@@ -101,12 +131,10 @@ export default function AdminMessages() {
       </Group>
 
       <Group my="sm">
-        {/* Recargar */}
         <Button leftSection={<IconReload size={16} />} onClick={load}>
           Recargar
         </Button>
 
-        {/* Exportar */}
         <Button
           leftSection={<IconDownload size={16} />}
           onClick={exportXlsx}
@@ -115,7 +143,6 @@ export default function AdminMessages() {
           Exportar
         </Button>
 
-        {/* Borrar todo */}
         <Button
           color="red"
           leftSection={<IconTrash size={16} />}
@@ -126,38 +153,68 @@ export default function AdminMessages() {
         </Button>
       </Group>
 
-      <ScrollArea h={500}>
-        <Table striped highlightOnHover>
-          <thead>
-            <tr>
-              <th>Usuario</th>
-              <th>Mensaje</th>
-              <th>Fecha</th>
-              <th style={{ width: 40 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {/* Para cada mensaje, una fila */}
-            {rows.map(r => (
-              <tr key={r.key}>
-                <td>{r.name}</td>
-                <td>{r.text}</td>
-                <td>{fmt(r.ts)}</td>
-                {/* Botón de borrar */}
-                <td>
-                  <ActionIcon
-                    color="red"
-                    variant="subtle"
-                    onClick={() => delOne(r.key)}
-                  >
-                    <IconTrash size={14} />
-                  </ActionIcon>
-                </td>
+      {!rows.length ? (
+        <Text c="dimmed">No hay mensajes para este evento.</Text>
+      ) : (
+        <ScrollArea h={500}>
+          <Table striped highlightOnHover withColumnBorders>
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Tipo</th>
+                <th>Mensaje</th>
+                <th>Fecha</th>
+                <th style={{ width: 40 }} />
               </tr>
-            ))}
-          </tbody>
-        </Table>
-      </ScrollArea>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const isQuestion = (r.type || "message") === "question";
+
+                return (
+                  <tr
+                    key={r.key}
+                    style={
+                      isQuestion
+                        ? { background: "var(--mantine-color-blue-0)" }
+                        : undefined
+                    }
+                  >
+                    <td>{r.name}</td>
+
+                    <td>
+                      <Badge
+                        variant={isQuestion ? "filled" : "light"}
+                        color={isQuestion ? "blue" : "gray"}
+                        size="sm"
+                      >
+                        {isQuestion ? "Pregunta" : "Mensaje"}
+                      </Badge>
+                    </td>
+
+                    <td style={{ fontWeight: isQuestion ? 600 : 400 }}>
+                      {r.text}
+                    </td>
+
+                    <td>{fmt(r.ts)}</td>
+
+                    <td>
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        onClick={() => delOne(r.key)}
+                        aria-label="Borrar mensaje"
+                      >
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </ScrollArea>
+      )}
 
       {/* Modal confirmación */}
       <Modal
@@ -167,11 +224,12 @@ export default function AdminMessages() {
         centered
       >
         <Stack gap="md">
-          <p>
-            {target === 'ALL'
-              ? '¿Seguro que deseas eliminar TODOS los mensajes del evento?'
-              : '¿Seguro que deseas eliminar este mensaje?'}
-          </p>
+          <Text>
+            {target === "ALL"
+              ? "¿Seguro que deseas eliminar TODOS los mensajes del evento?"
+              : "¿Seguro que deseas eliminar este mensaje?"}
+          </Text>
+
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setOpen(false)}>
               Cancelar
